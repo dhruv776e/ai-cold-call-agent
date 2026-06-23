@@ -1,0 +1,111 @@
+================================================================
+AI COLD CALL AGENT — SETUP GUIDE (4 Steps, ~20 minutes)
+================================================================
+
+STEP 1: GET YOUR FREE ACCOUNTS
+--------------------------------
+A) Twilio (calling) → twilio.com/try-twilio
+   - Sign up free → get $15 credit (~150 calls)
+   - Go to Console → copy:
+     • Account SID
+     • Auth Token
+   - Buy a US phone number (costs $1/month from your credit):
+     Phone Numbers → Manage → Buy a Number → Search "+1" → Buy
+
+B) OpenAI (AI brain) → platform.openai.com
+   - Sign up → you get $5 free credit
+   - Go to API Keys → Create new key → copy it
+
+C) GitHub (stores your code) → github.com
+   - Sign up free
+   - Create new repository → name it "ai-cold-call-agent"
+   - Upload all 4 files: app.py, requirements.txt, render.yaml, static/index.html
+     (drag and drop them into the repo)
+
+D) Render (hosts your server) → render.com
+   - Sign up free with your GitHub account
+   - New → Web Service → Connect your GitHub repo
+   - It will auto-detect render.yaml and deploy
+
+
+STEP 2: SET ENVIRONMENT VARIABLES ON RENDER
+---------------------------------------------
+After deploying on Render, go to:
+Environment → Add the following variables:
+
+  TWILIO_ACCOUNT_SID   = ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  TWILIO_AUTH_TOKEN    = your_auth_token_here
+  TWILIO_PHONE_NUMBER  = +12345678900  ← your Twilio number
+  OPENAI_API_KEY       = sk-xxxxxxxxxxxxxxxxxxxx
+  SERVER_URL           = https://ai-cold-call-agent.onrender.com  ← your Render URL
+  YOUR_NAME            = Rahul   (change to your name)
+  YOUR_COMPANY         = WebPro Solutions   (change to your company)
+
+Click "Save Changes" → Render will redeploy automatically.
+
+
+STEP 3: CONNECT TWILIO TO YOUR SERVER
+---------------------------------------
+In Twilio Console:
+  Phone Numbers → Manage → Active Numbers → click your number
+  
+  Under "Voice & Fax":
+  A Call Comes In → Webhook → paste:
+  https://your-app-name.onrender.com/voice/start
+  
+  Method: HTTP POST → Save
+
+
+STEP 4: TEST IT
+-----------------
+1. Open your Render URL in browser (e.g. https://ai-cold-call-agent.onrender.com)
+2. You'll see the dashboard
+3. Enter YOUR OWN number first to test
+4. Click "Start Call" — your phone will ring!
+5. Talk to the AI agent
+6. Check transcript in the dashboard
+
+================================================================
+HOW TO USE FOR YOUR BUSINESS
+================================================================
+
+SINGLE CALL:
+- Enter phone number (with +91) and business name
+- Click Start Call
+
+BULK CALLS (paste your list):
+Format each line as:
++919876543210,Sunshine Gym
++919123456789,Star Preschool
++919000111222,ABC Real Estate
+
+The agent will:
+✅ Introduce itself and your company
+✅ Pitch website building if they don't have a website
+✅ Pitch SEO if they already have one
+✅ Handle common objections
+✅ Log the full conversation transcript
+✅ Auto-detect when call should end
+
+================================================================
+COST ESTIMATE
+================================================================
+Twilio: $15 free credit
+  - Each call = ~$0.01 connection + ~$0.01/min
+  - A 2-minute call ≈ $0.03
+  - $15 credit ≈ ~400–500 calls
+
+OpenAI: $5 free credit
+  - Each GPT-4o-mini call ≈ $0.0001
+  - $5 ≈ 50,000 AI responses (basically unlimited)
+
+Render: FREE forever tier (may sleep after 15 min inactivity — just open the URL to wake it)
+
+================================================================
+TROUBLESHOOTING
+================================================================
+- Call goes to voicemail? Normal. Twilio still charges for it.
+- Agent not speaking? Check SERVER_URL env var matches your Render URL exactly.
+- Getting errors? Check Render logs: Dashboard → your service → Logs
+- Calls not going through? Verify Twilio webhook URL is set correctly.
+================================================================

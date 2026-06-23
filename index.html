@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Cold Call Agent</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #e0e0e0; min-height: 100vh; }
+
+  header {
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    padding: 20px 32px;
+    border-bottom: 1px solid #2a2a4a;
+    display: flex; align-items: center; gap: 14px;
+  }
+  header .logo { font-size: 28px; }
+  header h1 { font-size: 22px; font-weight: 700; color: #fff; }
+  header p  { font-size: 13px; color: #888; }
+
+  .stats {
+    display: flex; gap: 16px; padding: 24px 32px; flex-wrap: wrap;
+  }
+  .stat-card {
+    background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 12px;
+    padding: 18px 24px; flex: 1; min-width: 140px;
+  }
+  .stat-card .label { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+  .stat-card .value { font-size: 32px; font-weight: 700; color: #7c6fff; margin-top: 6px; }
+
+  .main { display: flex; gap: 20px; padding: 0 32px 32px; flex-wrap: wrap; }
+
+  .panel {
+    background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 14px;
+    padding: 24px;
+  }
+  .panel h2 { font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 18px; }
+
+  .left-panel  { flex: 0 0 340px; display: flex; flex-direction: column; gap: 20px; }
+  .right-panel { flex: 1; min-width: 300px; }
+
+  label { display: block; font-size: 12px; color: #aaa; margin-bottom: 6px; margin-top: 14px; }
+  label:first-of-type { margin-top: 0; }
+
+  input, textarea {
+    width: 100%; background: #0f0f1a; border: 1px solid #333;
+    border-radius: 8px; padding: 10px 14px; color: #e0e0e0;
+    font-size: 14px; outline: none;
+  }
+  input:focus, textarea:focus { border-color: #7c6fff; }
+  textarea { resize: vertical; min-height: 80px; font-family: monospace; font-size: 12px; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 11px 22px; border-radius: 8px; border: none;
+    font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity .2s;
+  }
+  .btn:hover { opacity: .85; }
+  .btn-primary { background: #7c6fff; color: #fff; width: 100%; justify-content: center; margin-top: 14px; }
+  .btn-bulk    { background: #1e7e34; color: #fff; width: 100%; justify-content: center; margin-top: 10px; }
+  .btn-refresh { background: #2a2a4a; color: #ccc; font-size: 12px; padding: 7px 14px; float: right; }
+
+  .bulk-hint { font-size: 11px; color: #666; margin-top: 6px; }
+
+  /* table */
+  .table-wrap { overflow-x: auto; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 10px 12px; color: #888; font-weight: 500; font-size: 11px;
+       text-transform: uppercase; border-bottom: 1px solid #2a2a4a; }
+  td { padding: 11px 12px; border-bottom: 1px solid #1e1e30; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #1e1e30; }
+
+  .badge {
+    display: inline-block; padding: 3px 9px; border-radius: 20px;
+    font-size: 11px; font-weight: 600;
+  }
+  .badge-initiated  { background: #2a2a4a; color: #aaa; }
+  .badge-in-progress{ background: #1a3a5c; color: #5bc0eb; }
+  .badge-completed  { background: #1a3a1a; color: #5cb85c; }
+  .badge-no-answer  { background: #3a1a1a; color: #e07070; }
+  .badge-busy       { background: #3a2a1a; color: #e0a070; }
+  .badge-failed     { background: #3a1a1a; color: #e07070; }
+
+  .transcript-btn {
+    background: #2a2a4a; border: none; color: #aaa; padding: 4px 10px;
+    border-radius: 6px; cursor: pointer; font-size: 11px;
+  }
+  .transcript-btn:hover { background: #3a3a5a; color: #fff; }
+
+  /* modal */
+  .modal-bg {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7);
+    align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal-bg.open { display: flex; }
+  .modal {
+    background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 14px;
+    padding: 28px; width: 90%; max-width: 520px; max-height: 80vh; overflow-y: auto;
+  }
+  .modal h3 { font-size: 16px; color: #fff; margin-bottom: 16px; }
+  .modal-close { float: right; background: none; border: none; color: #888; font-size: 22px; cursor: pointer; }
+  .turn { margin-bottom: 14px; }
+  .turn .role { font-size: 11px; font-weight: 700; text-transform: uppercase;
+                letter-spacing: 1px; margin-bottom: 4px; }
+  .turn.agent .role { color: #7c6fff; }
+  .turn.caller .role { color: #5cb85c; }
+  .turn .text { font-size: 13px; color: #ccc; line-height: 1.5; }
+
+  .toast {
+    position: fixed; bottom: 24px; right: 24px; background: #7c6fff;
+    color: #fff; padding: 12px 22px; border-radius: 10px; font-size: 14px;
+    font-weight: 600; opacity: 0; transition: opacity .3s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+
+  .empty { text-align: center; padding: 48px 0; color: #555; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">📞</div>
+  <div>
+    <h1>AI Cold Call Agent</h1>
+    <p>Website & SEO Sales — Automated</p>
+  </div>
+</header>
+
+<div class="stats">
+  <div class="stat-card"><div class="label">Total Calls</div><div class="value" id="s-total">0</div></div>
+  <div class="stat-card"><div class="label">Answered</div><div class="value" id="s-answered">0</div></div>
+  <div class="stat-card"><div class="label">Completed</div><div class="value" id="s-completed">0</div></div>
+  <div class="stat-card"><div class="label">No Answer</div><div class="value" id="s-noanswer">0</div></div>
+</div>
+
+<div class="main">
+
+  <!-- LEFT: controls -->
+  <div class="left-panel">
+
+    <!-- Single call -->
+    <div class="panel">
+      <h2>📲 Single Call</h2>
+      <label>Phone Number (with +91)</label>
+      <input id="single-phone" type="text" placeholder="+919876543210">
+      <label>Business Name</label>
+      <input id="single-biz" type="text" placeholder="e.g. Sunshine Gym">
+      <button class="btn btn-primary" onclick="singleCall()">▶ Start Call</button>
+    </div>
+
+    <!-- Bulk call -->
+    <div class="panel">
+      <h2>🚀 Bulk Call</h2>
+      <label>Paste numbers (one per line, format: +91XXXXXXXXXX,Business Name)</label>
+      <textarea id="bulk-numbers" placeholder="+919876543210,Sunshine Gym
++919123456789,Star Preschool
++919000111222,ABC Real Estate"></textarea>
+      <p class="bulk-hint">Max 50 numbers per batch. Calls start immediately.</p>
+      <button class="btn btn-bulk" onclick="bulkCall()">🚀 Start Bulk Calls</button>
+    </div>
+
+  </div>
+
+  <!-- RIGHT: log -->
+  <div class="right-panel panel">
+    <h2>📋 Call Log
+      <button class="btn btn-refresh" onclick="loadCalls()">↻ Refresh</button>
+    </h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Business</th>
+            <th>Phone</th>
+            <th>Status</th>
+            <th>Outcome</th>
+            <th>Time</th>
+            <th>Transcript</th>
+          </tr>
+        </thead>
+        <tbody id="call-tbody">
+          <tr><td colspan="6" class="empty">No calls yet. Start a call to see results here.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- Transcript modal -->
+<div class="modal-bg" id="modal-bg" onclick="closeModal(event)">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal()">×</button>
+    <h3 id="modal-title">Call Transcript</h3>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let callData = [];
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+async function singleCall() {
+  const phone = document.getElementById('single-phone').value.trim();
+  const biz   = document.getElementById('single-biz').value.trim();
+  if (!phone) { toast('Enter a phone number'); return; }
+  const r = await fetch('/api/make-call', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ phone, business_name: biz || 'your business' })
+  });
+  const d = await r.json();
+  if (d.success) { toast('✅ Call initiated!'); loadCalls(); }
+  else toast('❌ ' + (d.error || 'Error'));
+}
+
+async function bulkCall() {
+  const raw = document.getElementById('bulk-numbers').value.trim();
+  if (!raw) { toast('Paste some numbers first'); return; }
+  const numbers = raw.split('\n').map(line => {
+    const [phone, ...rest] = line.split(',');
+    return { phone: phone.trim(), business_name: rest.join(',').trim() || 'your business' };
+  }).filter(n => n.phone);
+
+  if (!numbers.length) { toast('No valid numbers found'); return; }
+  toast(`📞 Starting ${numbers.length} calls...`);
+
+  const r = await fetch('/api/bulk-call', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ numbers })
+  });
+  const d = await r.json();
+  const ok = d.results.filter(x => x.success).length;
+  toast(`✅ ${ok}/${numbers.length} calls initiated`);
+  loadCalls();
+}
+
+async function loadCalls() {
+  const r = await fetch('/api/calls');
+  callData = await r.json();
+  renderCalls();
+  updateStats();
+}
+
+function updateStats() {
+  document.getElementById('s-total').textContent     = callData.length;
+  document.getElementById('s-answered').textContent  = callData.filter(c => c.status === 'in-progress' || c.status === 'completed').length;
+  document.getElementById('s-completed').textContent = callData.filter(c => c.outcome === 'Completed').length;
+  document.getElementById('s-noanswer').textContent  = callData.filter(c => c.status === 'no-answer').length;
+}
+
+function renderCalls() {
+  const tbody = document.getElementById('call-tbody');
+  if (!callData.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">No calls yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = [...callData].reverse().map((c, i) => `
+    <tr>
+      <td><strong>${c.business_name}</strong></td>
+      <td style="font-family:monospace;font-size:12px">${c.phone}</td>
+      <td><span class="badge badge-${c.status.replace('-','')}">${c.status}</span></td>
+      <td>${c.outcome}</td>
+      <td>${c.started_at}</td>
+      <td>
+        ${c.transcript && c.transcript.length
+          ? `<button class="transcript-btn" onclick="showTranscript(${callData.length-1-i})">View</button>`
+          : '<span style="color:#555">—</span>'}
+      </td>
+    </tr>
+  `).join('');
+}
+
+function showTranscript(idx) {
+  const c = callData[idx];
+  document.getElementById('modal-title').textContent = `Transcript — ${c.business_name}`;
+  document.getElementById('modal-body').innerHTML = c.transcript.map(t => `
+    <div class="turn ${t.role}">
+      <div class="role">${t.role === 'agent' ? '🤖 Agent' : '👤 Caller'}</div>
+      <div class="text">${t.text}</div>
+    </div>
+  `).join('') || '<p style="color:#555">No transcript available.</p>';
+  document.getElementById('modal-bg').classList.add('open');
+}
+
+function closeModal(e) {
+  if (!e || e.target === document.getElementById('modal-bg'))
+    document.getElementById('modal-bg').classList.remove('open');
+}
+
+// auto-refresh every 10s
+loadCalls();
+setInterval(loadCalls, 10000);
+</script>
+</body>
+</html>
