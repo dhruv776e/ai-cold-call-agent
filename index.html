@@ -1,553 +1,111 @@
-from flask import Flask, request, Response, jsonify
-from twilio.twiml.voice_response import VoiceResponse, Gather
-from twilio.rest import Client
-from openai import OpenAI
-import os, json, re
-from datetime import datetime
+================================================================
+AI COLD CALL AGENT — SETUP GUIDE (4 Steps, ~20 minutes)
+================================================================
 
-app = Flask(__name__)
+STEP 1: GET YOUR FREE ACCOUNTS
+--------------------------------
+A) Twilio (calling) → twilio.com/try-twilio
+   - Sign up free → get $15 credit (~150 calls)
+   - Go to Console → copy:
+     • Account SID
+     • Auth Token
+   - Buy a US phone number (costs $1/month from your credit):
+     Phone Numbers → Manage → Buy a Number → Search "+1" → Buy
 
-# ── clients (lazy-loaded so missing env vars don't crash on startup) ─────────
-def get_twilio():
-    return Client(os.environ.get("TWILIO_ACCOUNT_SID",""), os.environ.get("TWILIO_AUTH_TOKEN",""))
+B) OpenAI (AI brain) → platform.openai.com
+   - Sign up → you get $5 free credit
+   - Go to API Keys → Create new key → copy it
 
-def get_openai():
-    return OpenAI(api_key=os.environ.get("OPENAI_API_KEY",""))
+C) GitHub (stores your code) → github.com
+   - Sign up free
+   - Create new repository → name it "ai-cold-call-agent"
+   - Upload all 4 files: app.py, requirements.txt, render.yaml, static/index.html
+     (drag and drop them into the repo)
 
-TWILIO_NUMBER   = os.environ.get("TWILIO_PHONE_NUMBER", "")
-YOUR_NAME       = os.environ.get("YOUR_NAME", "Rahul")
-YOUR_COMPANY    = os.environ.get("YOUR_COMPANY", "WebPro Solutions")
-SERVER_URL      = os.environ.get("SERVER_URL", "")
+D) Render (hosts your server) → render.com
+   - Sign up free with your GitHub account
+   - New → Web Service → Connect your GitHub repo
+   - It will auto-detect render.yaml and deploy
 
-# ── in-memory call state (resets on redeploy — fine for small volume) ─────────
-call_states = {}   # call_sid -> { history: [], phone: str, business_name: str, status: str }
-call_log    = []   # list of dicts for dashboard
 
-# ── system prompt ─────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = f"""You are {YOUR_NAME}, a friendly and professional website & SEO consultant from {YOUR_COMPANY}.
+STEP 2: SET ENVIRONMENT VARIABLES ON RENDER
+---------------------------------------------
+After deploying on Render, go to:
+Environment → Add the following variables:
 
-You are calling local Indian business owners to offer website creation and SEO services.
+  TWILIO_ACCOUNT_SID   = ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  TWILIO_AUTH_TOKEN    = your_auth_token_here
+  TWILIO_PHONE_NUMBER  = +12345678900  ← your Twilio number
+  OPENAI_API_KEY       = sk-xxxxxxxxxxxxxxxxxxxx
+  SERVER_URL           = https://ai-cold-call-agent.onrender.com  ← your Render URL
+  YOUR_NAME            = Rahul   (change to your name)
+  YOUR_COMPANY         = WebPro Solutions   (change to your company)
 
-YOUR GOAL:
-- Introduce yourself briefly
-- Ask if they currently have a website
-- If NO website → pitch website building (₹3,000–₹8,000, ready in 2–3 days)
-- If YES website → pitch SEO (help them rank higher on Google and get more customers)
-- Handle objections calmly
-- Try to book a callback or get their interest
-- Keep responses SHORT (2–3 sentences max) — this is a phone call, not an essay
+Click "Save Changes" → Render will redeploy automatically.
 
-PITCH POINTS:
-Website pitch: "A professional website helps customers find you on Google 24/7. We build it in just 2–3 days at a very affordable price. Can I send you a sample?"
-SEO pitch: "Having a website is great, but if customers can't find you on Google, you're losing business to competitors. We help you rank on the first page so more people call you directly."
 
-RULES:
-- Be friendly, not pushy
-- Speak in clear simple English
-- If they say not interested, thank them politely and say goodbye
-- If they say call later / busy, ask for best time and say goodbye
-- NEVER make up prices beyond ₹3,000–₹8,000 for websites or ₹2,000–₹5,000/month for SEO
-- Keep each response under 40 words — phone call, keep it natural
+STEP 3: CONNECT TWILIO TO YOUR SERVER
+---------------------------------------
+In Twilio Console:
+  Phone Numbers → Manage → Active Numbers → click your number
+  
+  Under "Voice & Fax":
+  A Call Comes In → Webhook → paste:
+  https://your-app-name.onrender.com/voice/start
+  
+  Method: HTTP POST → Save
 
-START the call with: "Hello, am I speaking with someone from [business name]? This is {YOUR_NAME} from {YOUR_COMPANY}. I'm calling about a quick opportunity to help grow your business online. Do you have 30 seconds?"
-"""
 
-def get_ai_response(call_sid, user_input, business_name="your business"):
-    """Get GPT response for the conversation turn."""
-    state = call_states.get(call_sid, {"history": [], "business_name": business_name})
-    history = state["history"]
+STEP 4: TEST IT
+-----------------
+1. Open your Render URL in browser (e.g. https://ai-cold-call-agent.onrender.com)
+2. You'll see the dashboard
+3. Enter YOUR OWN number first to test
+4. Click "Start Call" — your phone will ring!
+5. Talk to the AI agent
+6. Check transcript in the dashboard
 
-    # inject business name into system prompt
-    system = SYSTEM_PROMPT.replace("[business name]", business_name)
+================================================================
+HOW TO USE FOR YOUR BUSINESS
+================================================================
 
-    messages = [{"role": "system", "content": system}] + history + \
-               [{"role": "user", "content": user_input}]
+SINGLE CALL:
+- Enter phone number (with +91) and business name
+- Click Start Call
 
-    resp = get_openai().chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        max_tokens=120,
-        temperature=0.7,
-    )
-    ai_text = resp.choices[0].message.content.strip()
-
-    # update history
-    history.append({"role": "user",    "content": user_input})
-    history.append({"role": "assistant","content": ai_text})
-    state["history"] = history[-20:]  # keep last 20 turns
-    call_states[call_sid] = state
-
-    return ai_text
-
-def twiml_say_and_gather(text, action_url, hint=""):
-    """Return TwiML that speaks text then listens."""
-    resp = VoiceResponse()
-    gather = Gather(
-        input="speech",
-        action=action_url,
-        method="POST",
-        timeout=5,
-        speech_timeout="auto",
-        language="en-IN",
-    )
-    gather.say(text, voice="Polly.Raveena", language="en-IN")
-    resp.append(gather)
-    # fallback if no speech detected
-    resp.say("I didn't catch that. Let me try again.", voice="Polly.Raveena")
-    resp.redirect(action_url, method="POST")
-    return resp
-
-DASHBOARD_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Cold Call Agent</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #e0e0e0; min-height: 100vh; }
-
-  header {
-    background: linear-gradient(135deg, #1a1a2e, #16213e);
-    padding: 20px 32px;
-    border-bottom: 1px solid #2a2a4a;
-    display: flex; align-items: center; gap: 14px;
-  }
-  header .logo { font-size: 28px; }
-  header h1 { font-size: 22px; font-weight: 700; color: #fff; }
-  header p  { font-size: 13px; color: #888; }
-
-  .stats {
-    display: flex; gap: 16px; padding: 24px 32px; flex-wrap: wrap;
-  }
-  .stat-card {
-    background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 12px;
-    padding: 18px 24px; flex: 1; min-width: 140px;
-  }
-  .stat-card .label { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
-  .stat-card .value { font-size: 32px; font-weight: 700; color: #7c6fff; margin-top: 6px; }
-
-  .main { display: flex; gap: 20px; padding: 0 32px 32px; flex-wrap: wrap; }
-
-  .panel {
-    background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 14px;
-    padding: 24px;
-  }
-  .panel h2 { font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 18px; }
-
-  .left-panel  { flex: 0 0 340px; display: flex; flex-direction: column; gap: 20px; }
-  .right-panel { flex: 1; min-width: 300px; }
-
-  label { display: block; font-size: 12px; color: #aaa; margin-bottom: 6px; margin-top: 14px; }
-  label:first-of-type { margin-top: 0; }
-
-  input, textarea {
-    width: 100%; background: #0f0f1a; border: 1px solid #333;
-    border-radius: 8px; padding: 10px 14px; color: #e0e0e0;
-    font-size: 14px; outline: none;
-  }
-  input:focus, textarea:focus { border-color: #7c6fff; }
-  textarea { resize: vertical; min-height: 80px; font-family: monospace; font-size: 12px; }
-
-  .btn {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 11px 22px; border-radius: 8px; border: none;
-    font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity .2s;
-  }
-  .btn:hover { opacity: .85; }
-  .btn-primary { background: #7c6fff; color: #fff; width: 100%; justify-content: center; margin-top: 14px; }
-  .btn-bulk    { background: #1e7e34; color: #fff; width: 100%; justify-content: center; margin-top: 10px; }
-  .btn-refresh { background: #2a2a4a; color: #ccc; font-size: 12px; padding: 7px 14px; float: right; }
-
-  .bulk-hint { font-size: 11px; color: #666; margin-top: 6px; }
-
-  /* table */
-  .table-wrap { overflow-x: auto; margin-top: 8px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; padding: 10px 12px; color: #888; font-weight: 500; font-size: 11px;
-       text-transform: uppercase; border-bottom: 1px solid #2a2a4a; }
-  td { padding: 11px 12px; border-bottom: 1px solid #1e1e30; vertical-align: top; }
-  tr:last-child td { border-bottom: none; }
-  tr:hover td { background: #1e1e30; }
-
-  .badge {
-    display: inline-block; padding: 3px 9px; border-radius: 20px;
-    font-size: 11px; font-weight: 600;
-  }
-  .badge-initiated  { background: #2a2a4a; color: #aaa; }
-  .badge-in-progress{ background: #1a3a5c; color: #5bc0eb; }
-  .badge-completed  { background: #1a3a1a; color: #5cb85c; }
-  .badge-no-answer  { background: #3a1a1a; color: #e07070; }
-  .badge-busy       { background: #3a2a1a; color: #e0a070; }
-  .badge-failed     { background: #3a1a1a; color: #e07070; }
-
-  .transcript-btn {
-    background: #2a2a4a; border: none; color: #aaa; padding: 4px 10px;
-    border-radius: 6px; cursor: pointer; font-size: 11px;
-  }
-  .transcript-btn:hover { background: #3a3a5a; color: #fff; }
-
-  /* modal */
-  .modal-bg {
-    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7);
-    align-items: center; justify-content: center; z-index: 100;
-  }
-  .modal-bg.open { display: flex; }
-  .modal {
-    background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 14px;
-    padding: 28px; width: 90%; max-width: 520px; max-height: 80vh; overflow-y: auto;
-  }
-  .modal h3 { font-size: 16px; color: #fff; margin-bottom: 16px; }
-  .modal-close { float: right; background: none; border: none; color: #888; font-size: 22px; cursor: pointer; }
-  .turn { margin-bottom: 14px; }
-  .turn .role { font-size: 11px; font-weight: 700; text-transform: uppercase;
-                letter-spacing: 1px; margin-bottom: 4px; }
-  .turn.agent .role { color: #7c6fff; }
-  .turn.caller .role { color: #5cb85c; }
-  .turn .text { font-size: 13px; color: #ccc; line-height: 1.5; }
-
-  .toast {
-    position: fixed; bottom: 24px; right: 24px; background: #7c6fff;
-    color: #fff; padding: 12px 22px; border-radius: 10px; font-size: 14px;
-    font-weight: 600; opacity: 0; transition: opacity .3s; pointer-events: none;
-  }
-  .toast.show { opacity: 1; }
-
-  .empty { text-align: center; padding: 48px 0; color: #555; font-size: 14px; }
-</style>
-</head>
-<body>
-
-<header>
-  <div class="logo">📞</div>
-  <div>
-    <h1>AI Cold Call Agent</h1>
-    <p>Website & SEO Sales — Automated</p>
-  </div>
-</header>
-
-<div class="stats">
-  <div class="stat-card"><div class="label">Total Calls</div><div class="value" id="s-total">0</div></div>
-  <div class="stat-card"><div class="label">Answered</div><div class="value" id="s-answered">0</div></div>
-  <div class="stat-card"><div class="label">Completed</div><div class="value" id="s-completed">0</div></div>
-  <div class="stat-card"><div class="label">No Answer</div><div class="value" id="s-noanswer">0</div></div>
-</div>
-
-<div class="main">
-
-  <!-- LEFT: controls -->
-  <div class="left-panel">
-
-    <!-- Single call -->
-    <div class="panel">
-      <h2>📲 Single Call</h2>
-      <label>Phone Number (with +91)</label>
-      <input id="single-phone" type="text" placeholder="+919876543210">
-      <label>Business Name</label>
-      <input id="single-biz" type="text" placeholder="e.g. Sunshine Gym">
-      <button class="btn btn-primary" onclick="singleCall()">▶ Start Call</button>
-    </div>
-
-    <!-- Bulk call -->
-    <div class="panel">
-      <h2>🚀 Bulk Call</h2>
-      <label>Paste numbers (one per line, format: +91XXXXXXXXXX,Business Name)</label>
-      <textarea id="bulk-numbers" placeholder="+919876543210,Sunshine Gym
+BULK CALLS (paste your list):
+Format each line as:
++919876543210,Sunshine Gym
 +919123456789,Star Preschool
-+919000111222,ABC Real Estate"></textarea>
-      <p class="bulk-hint">Max 50 numbers per batch. Calls start immediately.</p>
-      <button class="btn btn-bulk" onclick="bulkCall()">🚀 Start Bulk Calls</button>
-    </div>
++919000111222,ABC Real Estate
 
-  </div>
+The agent will:
+✅ Introduce itself and your company
+✅ Pitch website building if they don't have a website
+✅ Pitch SEO if they already have one
+✅ Handle common objections
+✅ Log the full conversation transcript
+✅ Auto-detect when call should end
 
-  <!-- RIGHT: log -->
-  <div class="right-panel panel">
-    <h2>📋 Call Log
-      <button class="btn btn-refresh" onclick="loadCalls()">↻ Refresh</button>
-    </h2>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Business</th>
-            <th>Phone</th>
-            <th>Status</th>
-            <th>Outcome</th>
-            <th>Time</th>
-            <th>Transcript</th>
-          </tr>
-        </thead>
-        <tbody id="call-tbody">
-          <tr><td colspan="6" class="empty">No calls yet. Start a call to see results here.</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+================================================================
+COST ESTIMATE
+================================================================
+Twilio: $15 free credit
+  - Each call = ~$0.01 connection + ~$0.01/min
+  - A 2-minute call ≈ $0.03
+  - $15 credit ≈ ~400–500 calls
 
-</div>
+OpenAI: $5 free credit
+  - Each GPT-4o-mini call ≈ $0.0001
+  - $5 ≈ 50,000 AI responses (basically unlimited)
 
-<!-- Transcript modal -->
-<div class="modal-bg" id="modal-bg" onclick="closeModal(event)">
-  <div class="modal">
-    <button class="modal-close" onclick="closeModal()">×</button>
-    <h3 id="modal-title">Call Transcript</h3>
-    <div id="modal-body"></div>
-  </div>
-</div>
+Render: FREE forever tier (may sleep after 15 min inactivity — just open the URL to wake it)
 
-<div class="toast" id="toast"></div>
-
-<script>
-let callData = [];
-
-function toast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 3000);
-}
-
-async function singleCall() {
-  const phone = document.getElementById('single-phone').value.trim();
-  const biz   = document.getElementById('single-biz').value.trim();
-  if (!phone) { toast('Enter a phone number'); return; }
-  const r = await fetch('/api/make-call', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ phone, business_name: biz || 'your business' })
-  });
-  const d = await r.json();
-  if (d.success) { toast('✅ Call initiated!'); loadCalls(); }
-  else toast('❌ ' + (d.error || 'Error'));
-}
-
-async function bulkCall() {
-  const raw = document.getElementById('bulk-numbers').value.trim();
-  if (!raw) { toast('Paste some numbers first'); return; }
-  const numbers = raw.split('\\n').map(line => {
-    const [phone, ...rest] = line.split(',');
-    return { phone: phone.trim(), business_name: rest.join(',').trim() || 'your business' };
-  }).filter(n => n.phone);
-
-  if (!numbers.length) { toast('No valid numbers found'); return; }
-  toast(`📞 Starting ${numbers.length} calls...`);
-
-  const r = await fetch('/api/bulk-call', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ numbers })
-  });
-  const d = await r.json();
-  const ok = d.results.filter(x => x.success).length;
-  toast(`✅ ${ok}/${numbers.length} calls initiated`);
-  loadCalls();
-}
-
-async function loadCalls() {
-  const r = await fetch('/api/calls');
-  callData = await r.json();
-  renderCalls();
-  updateStats();
-}
-
-function updateStats() {
-  document.getElementById('s-total').textContent     = callData.length;
-  document.getElementById('s-answered').textContent  = callData.filter(c => c.status === 'in-progress' || c.status === 'completed').length;
-  document.getElementById('s-completed').textContent = callData.filter(c => c.outcome === 'Completed').length;
-  document.getElementById('s-noanswer').textContent  = callData.filter(c => c.status === 'no-answer').length;
-}
-
-function renderCalls() {
-  const tbody = document.getElementById('call-tbody');
-  if (!callData.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">No calls yet.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = [...callData].reverse().map((c, i) => `
-    <tr>
-      <td><strong>${c.business_name}</strong></td>
-      <td style="font-family:monospace;font-size:12px">${c.phone}</td>
-      <td><span class="badge badge-${c.status.replace('-','')}">${c.status}</span></td>
-      <td>${c.outcome}</td>
-      <td>${c.started_at}</td>
-      <td>
-        ${c.transcript && c.transcript.length
-          ? `<button class="transcript-btn" onclick="showTranscript(${callData.length-1-i})">View</button>`
-          : '<span style="color:#555">—</span>'}
-      </td>
-    </tr>
-  `).join('');
-}
-
-function showTranscript(idx) {
-  const c = callData[idx];
-  document.getElementById('modal-title').textContent = `Transcript — ${c.business_name}`;
-  document.getElementById('modal-body').innerHTML = c.transcript.map(t => `
-    <div class="turn ${t.role}">
-      <div class="role">${t.role === 'agent' ? '🤖 Agent' : '👤 Caller'}</div>
-      <div class="text">${t.text}</div>
-    </div>
-  `).join('') || '<p style="color:#555">No transcript available.</p>';
-  document.getElementById('modal-bg').classList.add('open');
-}
-
-function closeModal(e) {
-  if (!e || e.target === document.getElementById('modal-bg'))
-    document.getElementById('modal-bg').classList.remove('open');
-}
-
-// auto-refresh every 10s
-loadCalls();
-setInterval(loadCalls, 10000);
-</script>
-</body>
-</html>
-"""
-
-# ── ROUTES ────────────────────────────────────────────────────────────────────
-
-@app.route("/health")
-def health():
-    return jsonify({"status": "ok"})
-
-@app.route("/")
-def index():
-    return Response(DASHBOARD_HTML, mimetype="text/html")
-
-@app.route("/api/calls", methods=["GET"])
-def get_calls():
-    return jsonify(call_log)
-
-@app.route("/api/make-call", methods=["POST"])
-def make_call():
-    """Trigger a call to a single number."""
-    data = request.json
-    phone   = data.get("phone", "").strip()
-    biz     = data.get("business_name", "your business").strip()
-
-    if not phone:
-        return jsonify({"error": "Phone number required"}), 400
-
-    try:
-        call = get_twilio().calls.create(
-            to=phone,
-            from_=TWILIO_NUMBER,
-            url=f"{SERVER_URL}/voice/start?biz={biz.replace(' ', '+')}",
-            method="POST",
-            status_callback=f"{SERVER_URL}/voice/status",
-            status_callback_method="POST",
-        )
-        call_log.append({
-            "call_sid": call.sid,
-            "phone": phone,
-            "business_name": biz,
-            "status": "initiated",
-            "started_at": datetime.now().strftime("%H:%M:%S"),
-            "outcome": "—",
-            "transcript": [],
-        })
-        return jsonify({"success": True, "call_sid": call.sid})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/bulk-call", methods=["POST"])
-def bulk_call():
-    """Trigger calls to multiple numbers with delay."""
-    data     = request.json
-    numbers  = data.get("numbers", [])   # list of {phone, business_name}
-    results  = []
-    for item in numbers[:50]:            # cap at 50 per batch
-        phone = item.get("phone", "").strip()
-        biz   = item.get("business_name", "your business").strip()
-        if not phone:
-            continue
-        try:
-            call = get_twilio().calls.create(
-                to=phone,
-                from_=TWILIO_NUMBER,
-                url=f"{SERVER_URL}/voice/start?biz={biz.replace(' ', '+')}",
-                method="POST",
-                status_callback=f"{SERVER_URL}/voice/status",
-                status_callback_method="POST",
-            )
-            call_log.append({
-                "call_sid": call.sid, "phone": phone, "business_name": biz,
-                "status": "initiated", "started_at": datetime.now().strftime("%H:%M:%S"),
-                "outcome": "—", "transcript": [],
-            })
-            results.append({"phone": phone, "call_sid": call.sid, "success": True})
-        except Exception as e:
-            results.append({"phone": phone, "error": str(e), "success": False})
-    return jsonify({"results": results})
-
-@app.route("/voice/start", methods=["POST"])
-def voice_start():
-    """Called by Twilio when the call connects."""
-    call_sid = request.form.get("CallSid", "")
-    biz      = request.args.get("biz", "your business").replace("+", " ")
-
-    call_states[call_sid] = {"history": [], "business_name": biz, "phone": request.form.get("To",""), "status": "in-progress"}
-
-    opening = (
-        f"Hello, am I speaking with someone from {biz}? "
-        f"This is {YOUR_NAME} from {YOUR_COMPANY}. "
-        "I'm calling about a quick opportunity to help grow your business online. "
-        "Do you have 30 seconds?"
-    )
-
-    resp = twiml_say_and_gather(opening, f"{SERVER_URL}/voice/respond")
-    return Response(str(resp), mimetype="text/xml")
-
-@app.route("/voice/respond", methods=["POST"])
-def voice_respond():
-    """Handle each speech turn."""
-    call_sid    = request.form.get("CallSid", "")
-    user_speech = request.form.get("SpeechResult", "").strip()
-    biz         = call_states.get(call_sid, {}).get("business_name", "your business")
-
-    if not user_speech:
-        user_speech = "[silence]"
-
-    # update transcript in log
-    for entry in call_log:
-        if entry["call_sid"] == call_sid:
-            entry["transcript"].append({"role": "caller", "text": user_speech})
-            break
-
-    ai_reply = get_ai_response(call_sid, user_speech, biz)
-
-    # detect end-of-call signals
-    end_phrases = ["bye", "goodbye", "not interested", "remove", "don't call",
-                   "call later", "busy", "no thank you", "no thanks"]
-    is_ending = any(p in ai_reply.lower() for p in ["goodbye", "thank you for your time", "have a great day"])
-    is_ending = is_ending or any(p in user_speech.lower() for p in end_phrases)
-
-    for entry in call_log:
-        if entry["call_sid"] == call_sid:
-            entry["transcript"].append({"role": "agent", "text": ai_reply})
-            if is_ending:
-                entry["outcome"] = "Completed"
-            break
-
-    if is_ending:
-        resp = VoiceResponse()
-        resp.say(ai_reply, voice="Polly.Raveena", language="en-IN")
-        resp.hangup()
-        return Response(str(resp), mimetype="text/xml")
-
-    resp = twiml_say_and_gather(ai_reply, f"{SERVER_URL}/voice/respond")
-    return Response(str(resp), mimetype="text/xml")
-
-@app.route("/voice/status", methods=["POST"])
-def voice_status():
-    """Twilio status callback."""
-    call_sid    = request.form.get("CallSid", "")
-    call_status = request.form.get("CallStatus", "")
-    for entry in call_log:
-        if entry["call_sid"] == call_sid:
-            entry["status"] = call_status
-            if call_status in ("no-answer", "busy", "failed"):
-                entry["outcome"] = call_status.replace("-", " ").title()
-            break
-    return Response("", status=204)
-
-if __name__ == "__main__":
-    app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+================================================================
+TROUBLESHOOTING
+================================================================
+- Call goes to voicemail? Normal. Twilio still charges for it.
+- Agent not speaking? Check SERVER_URL env var matches your Render URL exactly.
+- Getting errors? Check Render logs: Dashboard → your service → Logs
+- Calls not going through? Verify Twilio webhook URL is set correctly.
+================================================================
